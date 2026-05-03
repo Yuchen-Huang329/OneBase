@@ -1,8 +1,8 @@
 #pragma once
 #include <memory>
-#include <vector>
 #include "onebase/execution/executors/abstract_executor.h"
 #include "onebase/execution/plans/plan_nodes.h"
+#include "onebase/storage/table/tuple.h"
 
 namespace onebase {
 
@@ -19,8 +19,9 @@ class NestedLoopJoinExecutor : public AbstractExecutor {
   const NestedLoopJoinPlanNode *plan_;
   std::unique_ptr<AbstractExecutor> left_executor_;
   std::unique_ptr<AbstractExecutor> right_executor_;
-  std::vector<Tuple> result_tuples_;
-  size_t cursor_{0};
+  bool has_left_tuple_{false};
+  Tuple left_tuple_{};
+  RID left_rid_{};
 };
 
 }  // namespace onebase

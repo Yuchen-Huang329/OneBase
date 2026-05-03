@@ -1,10 +1,10 @@
 #include "onebase/storage/index/b_plus_tree_iterator.h"
 #include <functional>
 #include "onebase/common/exception.h"
+#include "onebase/buffer/buffer_pool_manager.h"
+#include "onebase/storage/page/b_plus_tree_leaf_page.h"
 
 namespace onebase {
-
-template class BPlusTreeIterator<int, RID, std::less<int>>;
 
 template <typename KeyType, typename ValueType, typename KeyComparator>
 BPLUSTREE_ITERATOR_TYPE::BPlusTreeIterator(page_id_t page_id, int index, BufferPoolManager *bpm)
@@ -18,13 +18,46 @@ auto BPLUSTREE_ITERATOR_TYPE::IsEnd() const -> bool {
 template <typename KeyType, typename ValueType, typename KeyComparator>
 auto BPLUSTREE_ITERATOR_TYPE::operator*() -> const std::pair<KeyType, ValueType> & {
   // TODO(student): Dereference the iterator
-  throw NotImplementedException("BPlusTreeIterator::operator*");
+  if (IsEnd()) {
+    throw OneBaseException("dereference end iterator", ExceptionType::OUT_OF_RANGE);
+  }
+
+  Page *page = bpm_->FetchPage(page_id_);
+  auto *leaf = reinterpret_cast<BPlusTreeLeafPage<KeyType, ValueType, KeyComparator> *>(page->GetData());
+
+  static thread_local std::pair<KeyType, ValueType> item_cache;
+  item_cache = {leaf->KeyAt(index_), leaf->ValueAt(index_)};
+
+  bpm_->UnpinPage(page_id_, false);
+  return item_cache;
 }
 
 template <typename KeyType, typename ValueType, typename KeyComparator>
 auto BPLUSTREE_ITERATOR_TYPE::operator++() -> BPlusTreeIterator & {
   // TODO(student): Advance the iterator to the next key-value pair
-  throw NotImplementedException("BPlusTreeIterator::operator++");
+  if (IsEnd()) {
+    return *this;
+  }
+
+  page_id_t current_page_id = page_id_;
+  Page *page = bpm_->FetchPage(current_page_id);
+  auto *leaf = reinterpret_cast<BPlusTreeLeafPage<KeyType, ValueType, KeyComparator> *>(page->GetData());
+
+  index_++;
+
+  if (index_ >= leaf->GetSize()) {
+    page_id_t next_page_id = leaf->GetNextPageId();
+    if (next_page_id == INVALID_PAGE_ID) {
+      page_id_ = INVALID_PAGE_ID;
+      index_ = 0;
+    } else {
+      page_id_ = next_page_id;
+      index_ = 0;
+    }
+  }
+
+  bpm_->UnpinPage(current_page_id, false);
+  return *this;
 }
 
 template <typename KeyType, typename ValueType, typename KeyComparator>
@@ -36,5 +69,5 @@ template <typename KeyType, typename ValueType, typename KeyComparator>
 auto BPLUSTREE_ITERATOR_TYPE::operator!=(const BPlusTreeIterator &other) const -> bool {
   return !(*this == other);
 }
-
+template class BPlusTreeIterator<int, RID, std::less<int>>;
 }  // namespace onebase

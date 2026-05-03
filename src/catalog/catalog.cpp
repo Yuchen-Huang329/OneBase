@@ -1,4 +1,6 @@
 #include "onebase/catalog/catalog.h"
+#include <utility>
+#include <vector>
 #include <stdexcept>
 
 namespace onebase {
@@ -40,10 +42,13 @@ auto Catalog::GetAllTables() const -> std::vector<TableInfo *> {
 auto Catalog::CreateIndex(const std::string &index_name, const std::string &table_name,
                           const std::vector<uint32_t> &key_attrs) -> IndexInfo * {
   auto *table_info = GetTable(table_name);
-  if (table_info == nullptr || index_name.empty() || key_attrs.empty()) { return nullptr; }
-  if (GetIndex(index_name, table_name) != nullptr) { return nullptr; }
+  if (table_info == nullptr || index_name.empty() || key_attrs.empty()) {
+    return nullptr;
+  }
+  if (GetIndex(index_name, table_name) != nullptr) {
+    return nullptr;
+  }
 
-  // Build key schema from key attributes
   std::vector<Column> key_columns;
   for (auto attr : key_attrs) {
     if (attr >= table_info->schema_.GetColumnCount()) {
@@ -54,18 +59,42 @@ auto Catalog::CreateIndex(const std::string &index_name, const std::string &tabl
   Schema key_schema(key_columns);
 
   auto index_oid = next_index_oid_++;
-  auto index_info = std::make_unique<IndexInfo>(
-      std::move(key_schema), index_name, table_name, index_oid, key_attrs);
-  if (key_attrs.size() == 1 &&
-      table_info->schema_.GetColumn(key_attrs.front()).GetType() == TypeId::INTEGER) {
-    index_info->supports_point_lookup_ = true;
-    for (auto it = table_info->table_->Begin(); it != table_info->table_->End(); ++it) {
-      Tuple tuple = *it;
-      RID rid = it.GetRID();
-      int32_t key = tuple.GetValue(&table_info->schema_, key_attrs.front()).GetAsInteger();
-      index_info->InsertEntry(key, rid);
+  auto bpt_index = std::make_unique<BPlusTree<int, RID, std::less<int>>>(
+      index_name, bpm_, std::less<int>{});
+
+  std::vector<std::pair<int32_t, RID>> indexed_rows;
+  if (!key_attrs.empty()) {
+    uint32_t key_attr = key_attrs[0];
+    auto iter = table_info->table_->Begin();
+    auto end = table_info->table_->End();
+
+    while (iter != end) {
+      RID rid = iter.GetRID();
+      Tuple tuple = *iter;
+
+      int key = tuple.GetValue(&table_info->schema_, key_attr).GetAsInteger();
+      indexed_rows.emplace_back(key, rid);
+      bpt_index->Insert(key, rid);
+
+      ++iter;
     }
   }
+
+  auto index_info = std::make_unique<IndexInfo>(
+      std::move(key_schema),
+      index_name,
+      table_name,
+      index_oid,
+      key_attrs,
+      std::move(bpt_index));
+  index_info->supports_point_lookup_ =
+      (key_attrs.size() == 1 &&
+       table_info->schema_.GetColumn(key_attrs.front()).GetType() == TypeId::INTEGER);
+
+  for (const auto &[key, rid] : indexed_rows) {
+    index_info->InsertEntry(key, rid);
+  }
+
   auto *raw = index_info.get();
   indexes_[index_oid] = std::move(index_info);
   index_names_[table_name][index_name] = index_oid;
@@ -74,9 +103,13 @@ auto Catalog::CreateIndex(const std::string &index_name, const std::string &tabl
 
 auto Catalog::DropIndex(const std::string &index_name, const std::string &table_name) -> bool {
   auto table_it = index_names_.find(table_name);
-  if (table_it == index_names_.end()) { return false; }
+  if (table_it == index_names_.end()) {
+    return false;
+  }
   auto idx_it = table_it->second.find(index_name);
-  if (idx_it == table_it->second.end()) { return false; }
+  if (idx_it == table_it->second.end()) {
+    return false;
+  }
 
   indexes_.erase(idx_it->second);
   table_it->second.erase(idx_it);
